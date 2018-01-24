@@ -16,6 +16,14 @@
 
 package io.confluent.kafka.schemaregistry.storage;
 
+import io.confluent.kafka.schemaregistry.exceptions.SchemaRegistryException;
+import io.confluent.kafka.schemaregistry.rest.SchemaRegistryConfig;
+import io.confluent.kafka.schemaregistry.storage.exceptions.SerializationException;
+import io.confluent.kafka.schemaregistry.storage.exceptions.StoreException;
+import io.confluent.kafka.schemaregistry.storage.exceptions.StoreInitializationException;
+import io.confluent.kafka.schemaregistry.storage.exceptions.StoreTimeoutException;
+import io.confluent.kafka.schemaregistry.storage.serialization.Serializer;
+import io.confluent.rest.RestConfig;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.Config;
@@ -43,15 +51,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import io.confluent.kafka.schemaregistry.exceptions.SchemaRegistryException;
-import io.confluent.kafka.schemaregistry.rest.SchemaRegistryConfig;
-import io.confluent.kafka.schemaregistry.storage.exceptions.SerializationException;
-import io.confluent.kafka.schemaregistry.storage.exceptions.StoreException;
-import io.confluent.kafka.schemaregistry.storage.exceptions.StoreInitializationException;
-import io.confluent.kafka.schemaregistry.storage.exceptions.StoreTimeoutException;
-import io.confluent.kafka.schemaregistry.storage.serialization.Serializer;
-import io.confluent.rest.RestConfig;
-
 public class KafkaStore<K, V> implements Store<K, V> {
 
   private static final Logger log = LoggerFactory.getLogger(KafkaStore.class);
@@ -73,6 +72,7 @@ public class KafkaStore<K, V> implements Store<K, V> {
   private final K noopKey;
   private volatile long lastWrittenOffset = -1L;
   private final SchemaRegistryConfig config;
+  private final boolean doTopicValidation;
 
   public KafkaStore(SchemaRegistryConfig config,
                     StoreUpdateHandler<K, V> storeUpdateHandler,
@@ -93,6 +93,8 @@ public class KafkaStore<K, V> implements Store<K, V> {
                    : config.getString(SchemaRegistryConfig.KAFKASTORE_GROUP_ID_CONFIG);
     initTimeout = config.getInt(SchemaRegistryConfig.KAFKASTORE_INIT_TIMEOUT_CONFIG);
     timeout = config.getInt(SchemaRegistryConfig.KAFKASTORE_TIMEOUT_CONFIG);
+    this.doTopicValidation =
+        config.getBoolean(SchemaRegistryConfig.SCHEMAREGISTRY_DO_TOPIC_VALIDATION_CONFIG);
     this.storeUpdateHandler = storeUpdateHandler;
     this.serializer = serializer;
     this.localStore = localStore;
@@ -247,23 +249,24 @@ public class KafkaStore<K, V> implements Store<K, V> {
                + "increase the replication factor of the topic.");
     }
 
-    ConfigResource topicResource = new ConfigResource(ConfigResource.Type.TOPIC, topic);
+    if (doTopicValidation) {
+      ConfigResource topicResource = new ConfigResource(ConfigResource.Type.TOPIC, topic);
+      Map<ConfigResource, Config> configs =
+          admin.describeConfigs(Collections.singleton(topicResource)).all()
+              .get(initTimeout, TimeUnit.MILLISECONDS);
+      Config topicConfigs = configs.get(topicResource);
+      String retentionPolicy = topicConfigs.get(TopicConfig.CLEANUP_POLICY_CONFIG).value();
+      if (retentionPolicy == null || !TopicConfig.CLEANUP_POLICY_COMPACT.equals(retentionPolicy)) {
+        log.error("The retention policy of the schema topic " + topic + " is incorrect. "
+                  + "You must configure the topic to 'compact' cleanup policy to avoid Kafka "
+                  + "deleting your schemas after a week. "
+                  + "Refer to Kafka documentation for more details on cleanup policies");
 
-    Map<ConfigResource, Config> configs =
-        admin.describeConfigs(Collections.singleton(topicResource)).all()
-            .get(initTimeout, TimeUnit.MILLISECONDS);
-    Config topicConfigs = configs.get(topicResource);
-    String retentionPolicy = topicConfigs.get(TopicConfig.CLEANUP_POLICY_CONFIG).value();
-    if (retentionPolicy == null || !TopicConfig.CLEANUP_POLICY_COMPACT.equals(retentionPolicy)) {
-      log.error("The retention policy of the schema topic " + topic + " is incorrect. "
-                + "You must configure the topic to 'compact' cleanup policy to avoid Kafka "
-                + "deleting your schemas after a week. "
-                + "Refer to Kafka documentation for more details on cleanup policies");
+        throw new StoreInitializationException("The retention policy of the schema topic " + topic
+                                               + " is incorrect. Expected cleanup.policy to be "
+                                               + "'compact' but it is " + retentionPolicy);
 
-      throw new StoreInitializationException("The retention policy of the schema topic " + topic
-                                             + " is incorrect. Expected cleanup.policy to be "
-                                             + "'compact' but it is " + retentionPolicy);
-
+      }
     }
   }
 

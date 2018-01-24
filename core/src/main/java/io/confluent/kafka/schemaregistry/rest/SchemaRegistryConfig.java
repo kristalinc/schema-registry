@@ -16,11 +16,21 @@
 
 package io.confluent.kafka.schemaregistry.rest;
 
+import io.confluent.common.config.ConfigDef;
+import io.confluent.common.config.ConfigException;
+import io.confluent.kafka.schemaregistry.avro.AvroCompatibilityLevel;
+import io.confluent.rest.RestConfig;
+import io.confluent.rest.RestConfigException;
+import kafka.cluster.Broker;
+import kafka.cluster.EndPoint;
+import kafka.utils.ZkUtils;
 import org.apache.kafka.common.security.JaasUtils;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.utils.Utils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.collection.JavaConversions;
+import scala.collection.Seq;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -30,17 +40,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
-
-import io.confluent.common.config.ConfigDef;
-import io.confluent.common.config.ConfigException;
-import io.confluent.kafka.schemaregistry.avro.AvroCompatibilityLevel;
-import io.confluent.rest.RestConfig;
-import io.confluent.rest.RestConfigException;
-import kafka.cluster.Broker;
-import kafka.cluster.EndPoint;
-import kafka.utils.ZkUtils;
-import scala.collection.JavaConversions;
-import scala.collection.Seq;
 
 import static io.confluent.common.config.ConfigDef.Range.atLeast;
 import static io.confluent.kafka.schemaregistry.client.rest.Versions.PREFERRED_RESPONSE_TYPES;
@@ -155,6 +154,13 @@ public class SchemaRegistryConfig extends RestConfig {
       "schema.registry.resource.extension.class";
   public static final String SCHEMAREGISTRY_INTER_INSTANCE_PROTOCOL_CONFIG =
       "schema.registry.inter.instance.protocol";
+
+  public static final String SCHEMAREGISTRY_DO_TOPIC_VALIDATION_CONFIG =
+      "schema.registry.do.topic.validation";
+
+  protected static final String SCHEMAREGISTRY_DO_TOPIC_VALIDATION_DOC =
+      "Disable this setting if your kafka broker version is lower than 0.11.0.0. You will have to "
+      + "manually verify that the topic for schema-registry is setup appropriately. ";
 
   protected static final String SCHEMAREGISTRY_GROUP_ID_DOC =
       "Use this setting to override the group.id for the Kafka group used when Kafka is used for "
@@ -473,8 +479,9 @@ public class SchemaRegistryConfig extends RestConfig {
             ConfigDef.Importance.LOW, SCHEMAREGISTRY_RESOURCE_EXTENSION_DOC
         )
         .define(SCHEMAREGISTRY_INTER_INSTANCE_PROTOCOL_CONFIG, ConfigDef.Type.STRING, HTTP,
-            ConfigDef.Importance.LOW, SCHEMAREGISTRY_INTER_INSTANCE_PROTOCOL_DOC);
-
+            ConfigDef.Importance.LOW, SCHEMAREGISTRY_INTER_INSTANCE_PROTOCOL_DOC)
+        .define(SCHEMAREGISTRY_DO_TOPIC_VALIDATION_CONFIG, ConfigDef.Type.BOOLEAN, true,
+            ConfigDef.Importance.HIGH, SCHEMAREGISTRY_DO_TOPIC_VALIDATION_DOC);
   }
 
   private final AvroCompatibilityLevel compatibilityType;
